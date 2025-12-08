@@ -1,3 +1,4 @@
+/// <reference types="@webgpu/types" />
 import init, { generate_units_v2 } from './pkg/casshern_sim';
 import { runTests } from './test';
 
@@ -738,7 +739,7 @@ async function main() {
     size: unitData.length,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
   });
-  device.queue.writeBuffer(unitBuffer, 0, unitData);
+  device.queue.writeBuffer(unitBuffer, 0, unitData as any);
 
   const uniformBuffer = device.createBuffer({
     size: 64,
@@ -759,7 +760,7 @@ async function main() {
   gridView.setUint32(12, numUnits, true);
   gridView.setUint32(16, MAX_UNITS_PER_CELL, true);
   // padding: bytes 20-47 are already 0
-  device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
+  device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData as any);
 
   // グリッドカウント (各セルのユニット数)
   const gridCountBuffer = device.createBuffer({
@@ -772,7 +773,7 @@ async function main() {
     size: GRID_TOTAL_CELLS * 4,
     usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
   });
-  device.queue.writeBuffer(zeroGridBuffer, 0, new Uint32Array(GRID_TOTAL_CELLS).fill(0));
+  device.queue.writeBuffer(zeroGridBuffer, 0, new Uint32Array(GRID_TOTAL_CELLS).fill(0) as any);
 
   // グリッドセル (各セルに格納されたユニットインデックス)
   const gridCellsBuffer = device.createBuffer({
@@ -786,7 +787,7 @@ async function main() {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
   // 初期化（0埋め）
-  device.queue.writeBuffer(damageBuffer, 0, new Int32Array(numUnits).fill(0));
+  device.queue.writeBuffer(damageBuffer, 0, new Int32Array(numUnits).fill(0) as any);
 
   // 集計用バッファ (3 factions * 16 bytes = 48 bytes)
   // FactionStats: count(u32), hp(i32), pad(u32), pad(u32)
@@ -801,7 +802,7 @@ async function main() {
     size: STATS_BUFFER_SIZE,
     usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
   });
-  device.queue.writeBuffer(zeroStatsBuffer, 0, new Int32Array(STATS_BUFFER_SIZE / 4).fill(0));
+  device.queue.writeBuffer(zeroStatsBuffer, 0, new Int32Array(STATS_BUFFER_SIZE / 4).fill(0) as any);
 
   // リードバック用バッファ (ダブルバッファリング)
   const readbackBuffers = [
@@ -941,16 +942,13 @@ async function main() {
   let tick = 0;
   let humanPhase = 0;
   let lastTime = performance.now();
-  let isMapping = false;
 
-  let phaseTimer = 0;
   // setInterval削除
 
   // キャシャーンAIモード: 0=殲滅(デフォルト), 1=突撃, 2=援護
   let casshernMode = 0;
 
   // グリッドクリア用ゼロバッファ
-  const zeroBuffer = new Uint32Array(GRID_TOTAL_CELLS).fill(0);
 
   function render() {
     const now = performance.now();
@@ -1061,7 +1059,6 @@ async function main() {
         const humanCount = data[4];
         const humanHpSum = data[5]; // Renamed to avoid conflict with initial humanHp
         // Casshern (idx 8-11)
-        const casshernHp = data[9];
 
         // console.log(`HUD Update: Andro=${androCount}, Human=${humanCount}, Casshern=${casshernHp}`);
 
@@ -1076,11 +1073,9 @@ async function main() {
         // 初期HPは概算: Andro=100, Human=50, Casshern=50,000,000
         const maxAndroHp = androUnits * androHp;
         const maxHumanHp = humanUnits * humanHp;
-        const maxCasshernHp = 50000000;
 
         const androHpPct = Math.max(0, Math.min(100, (androHpSum / maxAndroHp) * 100));
         const humanHpPct = Math.max(0, Math.min(100, (humanHpSum / maxHumanHp) * 100));
-        const casshernHpPct = Math.max(0, Math.min(100, (casshernHp / maxCasshernHp) * 100));
 
         const androHpBar = document.getElementById('andro-hp');
         if (androHpBar) androHpBar.style.width = `${androHpPct}%`;
@@ -1103,11 +1098,6 @@ async function main() {
           console.log(`Phase changed to: ${['Early', 'Mid', 'Late'][humanPhase]} (Human HP: ${humanHpPct.toFixed(1)}%)`);
         }
 
-        const casshernHpBar = document.getElementById('casshern-hp'); // Assuming ID exists or needs to be added if not present. Wait, index.html doesn't have casshern-hp bar.
-        // Casshern bar is not in index.html, skipping for now or need to check.
-        // The original code had: document.querySelector('#casshern-status .hp-fill')
-        // index.html has: <div class="casshern-status" id="casshern-status">キャシャーン: アクティブ</div>
-        // So there is no bar for Casshern yet.
       }).catch(err => {
         console.error("MapAsync error:", err);
       });
@@ -1164,28 +1154,6 @@ async function main() {
     // updateHUD(); // 廃止
 
     requestAnimationFrame(render);
-  }
-
-  // HUD要素取得
-  const phaseDisplay = document.getElementById('phase-display');
-  const androCountEl = document.getElementById('andro-count');
-  const humanCountEl = document.getElementById('human-count');
-  const androHpEl = document.getElementById('andro-hp');
-  const humanHpEl = document.getElementById('human-hp');
-
-  function updateHUD() {
-    // フェーズ表示
-    const phases = ['EARLY', 'MID', 'LATE'];
-    const phaseClasses = ['early', 'mid', 'late'];
-    if (phaseDisplay) {
-      phaseDisplay.textContent = phases[humanPhase];
-      phaseDisplay.className = 'phase-value ' + phaseClasses[humanPhase];
-    }
-
-
-    // HPバー（100%固定、後で残存率に変更可能）
-    // if (androHpEl) androHpEl.style.width = '100%';
-    // if (humanHpEl) humanHpEl.style.width = '100%';
   }
 
   // 設定パネル（常時表示）

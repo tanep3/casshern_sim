@@ -7,6 +7,10 @@ echo "========================================"
 
 # 1. Build Rust WASM
 echo "[1/3] Building Rust WASM..."
+if ! command -v wasm-pack &> /dev/null; then
+    echo "wasm-pack not found. Installing via cargo..."
+    cargo install wasm-pack
+fi
 wasm-pack build --target web --out-dir pkg
 
 # 2. Copy pkg to frontend

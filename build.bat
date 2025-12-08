@@ -7,6 +7,11 @@ echo ========================================
 
 REM 1. Build Rust WASM
 echo [1/3] Building Rust WASM...
+where wasm-pack >nul 2>nul
+if %errorlevel% neq 0 (
+    echo is wasm-pack not found. Installing via cargo...
+    cargo install wasm-pack
+)
 wasm-pack build --target web --out-dir pkg
 if %errorlevel% neq 0 exit /b %errorlevel%
 
