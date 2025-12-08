@@ -1,0 +1,145 @@
+{
+    "original_prompt": "要件定義に基づいてCasshern SimのUIとシステム構造を設計する。GPU中心設計、小隊システム、兵器アンロックUIを含む。",
+    "ui_layout_structure": {
+        "Main View": {
+            "type": "Canvas/WebGPU Surface",
+            "content": "戦場の2D俯瞰視点。ユニットはGPUインスタンシングで描画。",
+            "overlays": [
+                "選択ハイライト",
+                "攻撃エフェクト"
+            ]
+        },
+        "HUD Layer": {
+            "Top Left": "ステータスパネル (FPS, ユニット数)",
+            "Top Right": "シミュレーション制御 (一時停止, 再開, リスタート, AI間隔スライダー)",
+            "Bottom Left": "キャシャーン操作パネル (モードボタン: 殲滅, 突撃, 援護)",
+            "Bottom Right": "兵器アンロック & 装備パネル (アイコン一覧, 装備切替)",
+            "Center Top": "フェーズインジケータ & 士気バー",
+            "Edges": "ヒーロー/ボス HPバー"
+        },
+        "Config Screen": {
+            "Sliders": [
+                "アンドロ数 (1-100k)",
+                "人類数 (1-100k)",
+                "AI計算間隔 (1-60 tick)"
+            ],
+            "Start Button": "GPUバッファ確保と初期化"
+        }
+    },
+    "screen_transition_flow": [
+        "タイトル/設定画面 -> (開始: GPUバッファ確保) -> 戦闘シミュレーション画面",
+        "戦闘シミュレーション画面 -> (終了条件) -> 結果オーバーレイ -> (リスタート) -> 設定画面"
+    ],
+    "api_specification": {
+        "Core Engine (WASM)": [
+            "init(config: SimConfig) -> void",
+            "dispatch_compute() -> void (AI計算)",
+            "dispatch_render() -> void (描画)",
+            "update_uniforms(input: PlayerInput) -> void",
+            "equip_weapon(unit_id: u32, weapon_id: u8) -> void"
+        ],
+        "GPU Shaders (WGSL)": [
+            "compute_ai.wgsl (移動, 攻撃, 探索)",
+            "compute_morale.wgsl (士気計算)",
+            "render_units.wgsl (描画)"
+        ]
+    },
+    "data_model_structure": {
+        "GPU Buffer (SSBO)": {
+            "UnitData": {
+                "pos": "vec2<f32>",
+                "vel": "vec2<f32>",
+                "hp": "i32",
+                "state": "u32",
+                "faction": "u32",
+                "rank": "u32 (階級)",
+                "squad_id": "u32 (小隊ID)",
+                "morale": "f32 (士気)",
+                "weapon_id": "u32"
+            },
+            "GlobalUniforms": {
+                "tick": "u32",
+                "ai_interval": "u32",
+                "human_phase": "u32",
+                "casshern_mode": "u32",
+                "player_input": "vec2<f32>"
+            }
+        },
+        "CPU Mirror (Debug Only)": {
+            "Unit": "初期化時のみ使用"
+        }
+    },
+    "component_interaction_map": {
+        "Step 1": "ユーザーが「突撃モード」をクリック",
+        "Step 2": "UIレイヤが wasm.update_uniforms() を呼ぶ",
+        "Step 3": "WASMがGPU Uniformバッファを更新",
+        "Step 4": "Compute Shaderが `casshern_mode` を読み取り、AIロジックを分岐",
+        "Step 5": "キャシャーンユニットの速度ベクトルが更新される",
+        "Step 6": "Render Shaderが新しい位置で描画"
+    },
+    "user_scenario_mapping": {
+        "Scenario: Weapon Upgrade": [
+            "ユーザーが兵器パネルで「レーザーライフル」を選択",
+            "UIが `equip_weapon` を呼び出し、GPUバッファの `weapon_id` を更新",
+            "次のフレームから全人類ユニットがレーザーの射程と威力で攻撃開始"
+        ]
+    },
+    "infrastructure_design": {
+        "Build System": "Cargo (Rust) + wasm-pack + Vite (Frontend)",
+        "Compute": "WebGPU Compute Shaders (AI, Physics, Logic)",
+        "Hosting": "静的Webホスティング"
+    },
+    "implementation_strategy": {
+        "Phase 1": "基盤: WebGPU Compute/Render パイプライン構築。",
+        "Phase 2": "データ: SSBOによるUnitデータ構造の実装。",
+        "Phase 3": "AI (GPU): 移動・探索ロジックのWGSL実装。",
+        "Phase 4": "システム: 小隊・士気・フェーズ計算の実装。",
+        "Phase 5": "UI: 兵器アンロック・設定画面の実装。",
+        "Phase 6": "最適化: グリッド探索のチューニング。"
+    },
+    "constraints": {
+        "language_exclusion": [
+            "CPU側での重い計算"
+        ],
+        "tech_stack": [
+            "Rust",
+            "WASM",
+            "WebGPU (WGSL)",
+            "TypeScript"
+        ]
+    },
+    "z_axis": {
+        "Structure": [
+            "UI -> WASM -> GPU (SSBO/Compute)"
+        ],
+        "Function": [
+            "Configurable Simulation -> Parallel Execution -> Visual Feedback"
+        ],
+        "Contextual": [
+            "High-Performance Browser App"
+        ]
+    },
+    "ghost_axis": {
+        "values": [
+            "GPUのパワーを最大限に引き出したい",
+            "設定をいじってシミュレーション結果の変化を楽しみたい"
+        ]
+    },
+    "vector_axis": {
+        "CPU Logic vs. GPU Logic": {
+            "semantic_similarity": 0.2,
+            "opposition_strength": 9,
+            "meaning_projection": [
+                "All Logic on GPU",
+                "CPU as Dispatcher"
+            ]
+        }
+    },
+    "evaluation_result": {
+        "status": "pending"
+    },
+    "reconsideration": {
+        "trigger": "GPUメモリ不足やTDR（Timeout Detection and Recovery）",
+        "action": "バッチ分割やデータ構造の圧縮"
+    }
+}

@@ -1,0 +1,124 @@
+{
+  "original_prompt": "アンドロ軍団 vs 人類のシミュレーションゲーム 'Casshern Sim' を作成する。全AIはWebGPU Compute Shaderで動作。10万体規模。小隊・士気・兵器アンロック実装。",
+  "goal": {
+    "goal": "Rust, WASM, WebGPU Compute Shaderを駆使し、AIロジックと描画をGPU上で完全並列実行する高性能2D戦闘シミュレータを開発する。10万体規模の群衆制御、小隊・士気システム、動的な兵器運用を実現する。",
+    "note": {
+      "overview": "CPUは初期化とUIのみを担当し、シミュレーションの主導権はGPUにある。",
+      "function": "大量ユニットの自律行動と、プレイヤー介入（キャシャーン操作、兵器管理）を両立させる。"
+    }
+  },
+  "stakeholder_requirement_matrix": {
+    "Player": [
+      "10万体のユニットが個別に判断して動く様を見たい",
+      "キャシャーンを操作して戦局を変えたい（操作時はプレイヤー優先）",
+      "人類軍の武器を状況に応じて切り替えさせたい",
+      "シミュレーション速度やAI頻度を調整したい"
+    ],
+    "Developer": [
+      "AIロジックをCompute Shader (WGSL) で書きたい",
+      "CPU-GPU間のデータ転送を最小限に抑えたい",
+      "小隊・士気・階級といった複雑なパラメータをGPU上で計算させたい"
+    ]
+  },
+  "functional_requirements": [
+    "AIロジック（移動、攻撃、探索）はWebGPU Compute Shaderで完全並列実行する",
+    "ユニットデータの正本はGPUバッファ(SSBO)に置く",
+    "小隊システム（階級、指揮範囲、士気）を実装する",
+    "兵器アンロックおよび装備変更UIを実装し、即座にGPUへ反映する",
+    "キャシャーンAIはGPUロジックとプレイヤー入力のハイブリッドで動作する",
+    "近接探索範囲は視界半径の1/2とし、グリッド分割もこれに合わせる",
+    "AI計算間隔（tick）はユーザー設定可能（デフォルト3）とする",
+    "初期ユニット数は設定可能（最大100,000）とする",
+    "アンドロ（殲滅）、人類（フェーズ移行）、キャシャーン（モード別）の性格をGPUロジックとして実装する",
+    "描画パイプラインとAI計算パイプラインを分離する"
+  ],
+  "non_functional_requirements": [
+    "パフォーマンス: 10万体でも60FPS（AI計算負荷の分散）",
+    "アーキテクチャ: GPU中心設計（CPUはコントローラー）",
+    "拡張性: WGSLによるAIロジックの追加・変更が容易であること"
+  ],
+  "use_case_overview": [
+    "ユーザーはユニット数（最大10万）を設定して開始",
+    "GPU上で全ユニットが自律行動（小隊行動含む）",
+    "ユーザーはキャシャーンを操作、またはモード指示",
+    "ユーザーは兵器をアンロック・装備変更",
+    "戦局フェーズや士気が可視化される"
+  ],
+  "assumptions": [
+    "WebGPU対応環境必須",
+    "Compute Shaderによる複雑な分岐処理が許容範囲内の速度で動作する"
+  ],
+  "constraints": [
+    "WASMは初期化とUIブリッジのみ",
+    "主要ロジックは全てWGSL記述",
+    "データ構造はstd140/std430レイアウトに準拠"
+  ],
+  "risks": [
+    "GPUデバッグの難易度",
+    "複雑なAI（小隊連携）のWGSL実装の複雑さ"
+  ],
+  "acceptance_criteria": [
+    "10万体が60FPSで動作すること",
+    "小隊長死亡で部下の士気が下がり行動が変わること",
+    "キャシャーンがプレイヤー操作に即座に反応すること",
+    "兵器変更が全ユニットに即座に反映されること"
+  ],
+  "z_axis": {
+    "Structure": {
+      "values": [
+        "GPU SSBO (Unit Data) <-> Compute Shader (AI)",
+        "CPU (UI/Input) -> GPU Uniforms/Buffers"
+      ]
+    },
+    "Function": {
+      "values": [
+        "Massive Parallel AI",
+        "Hybrid Control (Player/AI)",
+        "Dynamic Load Balancing (Configurable Ticks)"
+      ]
+    },
+    "Contextual": {
+      "values": [
+        "High-Performance Web Tech Demo",
+        "Crowd Simulation Research"
+      ]
+    },
+    "Temporal": {
+      "values": [
+        "Initialization (CPU)",
+        "Runtime Loop (GPU)",
+        "Intervention (CPU->GPU)"
+      ]
+    }
+  },
+  "ghost_axis": {
+    "values": [
+      "CPUの限界を超えたい",
+      "10万の個体が意思を持って動く様を見たい"
+    ]
+  },
+  "vector_axis": {
+    "Logic Complexity vs. Parallel Efficiency": {
+      "semantic_similarity": {
+        "value": 0.7
+      },
+      "opposition_strength": {
+        "value": 8
+      },
+      "meaning_projection": {
+        "value": [
+          "WGSL Optimization",
+          "Branch Divergence Management",
+          "Data Locality"
+        ]
+      }
+    }
+  },
+  "evaluation_result": {
+    "status": "pending"
+  },
+  "reconsideration": {
+    "trigger": "WGSLの命令数制限や分岐による性能低下",
+    "action": "AIロジックの簡素化またはLOD（Level of Detail）AIの導入"
+  }
+}
