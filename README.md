@@ -4,6 +4,9 @@
 >
 > 「CPUの呪縛から解放された、GPUセントリック・シミュレーションの極限性能への挑戦。」
 
+**▶ ブラウザでそのまま遊べます： https://tanep3.github.io/casshern_sim/**
+（PCの Chrome など WebGPU 対応ブラウザで開いてください。インストール不要です）
+
 ![デモ動画](screen_shot.png)
 
 ## 1. プロジェクトの哲学と挑戦
