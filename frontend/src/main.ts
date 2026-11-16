@@ -186,81 +186,6 @@ fn find_nearest_enemy_grid(my_idx: u32, my_faction: u32, my_pos: vec2<f32>) -> i
     return nearest_idx;
 }
 
-// キャシャーン専用: 全ユニットからアンドロ（faction 0）を検索（全視野）
-fn find_andro_only(my_idx: u32, my_pos: vec2<f32>) -> i32 {
-    var nearest_dist_sq: f32 = 999999999.0;
-    var nearest_idx: i32 = -1;
-    
-    // キャシャーンは全視野: 全ユニットを検索
-    for (var i: u32 = 0u; i < globals.num_units; i++) {
-        if (i == my_idx) { continue; }
-        
-        let other = units[i];
-        if (other.state == 0u) { continue; }
-        if (other.faction != 0u) { continue; } // アンドロのみ
-        
-        let dist_sq = distance_sq(my_pos, other.pos);
-        if (dist_sq < nearest_dist_sq) {
-            nearest_dist_sq = dist_sq;
-            nearest_idx = i32(i);
-        }
-    }
-    
-    return nearest_idx;
-}
-
-// キャシャーン突撃モード: ボスまたは敵集団の重心を探す
-fn find_boss_or_cluster(my_pos: vec2<f32>) -> vec2<f32> {
-    var boss_idx: i32 = -1;
-    var min_boss_dist_sq: f32 = 999999999.0;
-    var cluster_center: vec2<f32> = vec2<f32>(0.0, 0.0);
-    var enemy_count: f32 = 0.0;
-
-    for (var i: u32 = 0u; i < globals.num_units; i++) {
-        let other = units[i];
-        if (other.state == 0u || other.faction != 0u) { continue; }
-
-        // 重心計算用
-        cluster_center = cluster_center + other.pos;
-        enemy_count = enemy_count + 1.0;
-
-        // ボス判定（Rank > 0）
-        if (other.rank > 0u) {
-            let dist_sq = distance_sq(my_pos, other.pos);
-            if (dist_sq < min_boss_dist_sq) {
-                min_boss_dist_sq = dist_sq;
-                boss_idx = i32(i);
-            }
-        }
-    }
-
-    if (boss_idx != -1) {
-        return units[boss_idx].pos;
-    } else if (enemy_count > 0.0) {
-        return cluster_center / enemy_count;
-    } else {
-        return vec2<f32>(-1.0, -1.0); // 敵なし
-    }
-}
-
-// キャシャーン援護モード: 最も近い人類を探す
-fn find_nearest_human(my_pos: vec2<f32>) -> i32 {
-    var nearest_dist_sq: f32 = 999999999.0;
-    var nearest_idx: i32 = -1;
-    
-    for (var i: u32 = 0u; i < globals.num_units; i++) {
-        let other = units[i];
-        if (other.state == 0u || other.faction != 1u) { continue; } // Humanのみ
-
-        let dist_sq = distance_sq(my_pos, other.pos);
-        if (dist_sq < nearest_dist_sq) {
-            nearest_dist_sq = dist_sq;
-            nearest_idx = i32(i);
-        }
-    }
-    return nearest_idx;
-}
-
 // 全人類探索（ボス用）
 fn find_human_global(my_pos: vec2<f32>) -> i32 {
     var nearest_dist_sq: f32 = 999999999.0;
@@ -285,11 +210,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     var unit = units[index];
-    
+
     if (unit.state == 0u) {
         return;
     }
-    
+
+    // キャシャーン（faction 2）は専用パス（CASSHERN_SHADER）で処理する。
+    // 大衆パスでは被ダメージの適用と死亡判定のみを行う（移動・攻撃は専用パス側）。
+    if (unit.faction == 2u) {
+        let received = atomicExchange(&damage_buffer[index], 0);
+        if (received > 0) {
+            unit.hp -= received;
+        }
+        if (unit.hp <= 0) {
+            unit.state = 0u;
+            unit.hp = 0;
+        }
+        units[index] = unit;
+        return;
+    }
+
     let dt = globals.delta_time;
     let base_speed: f32 = 50.0;
 
@@ -312,16 +252,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         var enemy_idx: i32 = -1;
-        
-        if (unit.faction == 2u) {
-            enemy_idx = find_andro_only(index, unit.pos);
-        } else {
-            enemy_idx = find_nearest_enemy_grid(index, unit.faction, unit.pos);
-            
-            // ボス(Rank>=2)かつ敵が見つからない場合は全探索
-            if (enemy_idx == -1 && unit.faction == 0u && unit.rank >= 2u) {
-                enemy_idx = find_human_global(unit.pos);
-            }
+
+        enemy_idx = find_nearest_enemy_grid(index, unit.faction, unit.pos);
+
+        // ボス(Rank>=2)かつ敵が見つからない場合は全探索
+        if (enemy_idx == -1 && unit.faction == 0u && unit.rank >= 2u) {
+            enemy_idx = find_human_global(unit.pos);
         }
         
         if (enemy_idx != -1) {
@@ -350,12 +286,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 damage = damage * 5;
             }
             
-            if (unit.faction == 2u) {
-                // キャシャーン補正: 攻撃力10倍、射程2倍
-                damage *= 10;
-                range *= 2.0;
-            }
-            
             // 攻撃判定
             if (dist < range) {
                 // ダメージ適用 (Atomic)
@@ -380,51 +310,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
                 else {
                     unit.vel = dir * base_speed * globals.human_speed_ratio; // 突撃
-                }
-            }
-            else {
-                // キャシャーン AIモード
-                if (globals.casshern_mode == 1u) {
-                    // 突撃モード
-                    let target_pos = find_boss_or_cluster(unit.pos);
-                    if (target_pos.x != -1.0) {
-                        let to_target = target_pos - unit.pos;
-                        let dist_target = length(to_target);
-                        if (dist_target > 10.0) {
-                            unit.vel = normalize(to_target) * base_speed * 2.0;
-                        } else {
-                             if (enemy_idx != -1) { // ターゲット付近の敵へ
-                                unit.vel = dir * base_speed;
-                            } else {
-                                unit.vel = vec2<f32>(0.0, 0.0);
-                            }
-                        }
-                    } else {
-                         unit.vel = vec2<f32>(0.0, 0.0);
-                    }
-                } else if (globals.casshern_mode == 2u) {
-                    // 援護モード
-                    let human_idx = find_nearest_human(unit.pos);
-                    if (human_idx != -1) {
-                         let target_human = units[human_idx];
-                         let to_human = target_human.pos - unit.pos;
-                         let dist_human = length(to_human);
-                         
-                         if (dist_human > 50.0) {
-                             unit.vel = normalize(to_human) * base_speed * 2.5;
-                         } else {
-                             if (enemy_idx != -1) {
-                                 unit.vel = dir * base_speed;
-                             } else {
-                                 unit.vel = normalize(to_human) * base_speed * 0.5;
-                             }
-                         }
-                    } else {
-                        unit.vel = vec2<f32>(0.0, 0.0);
-                    }
-                } else {
-                    // 殲滅モード
-                    unit.vel = dir * base_speed;
                 }
             }
         }
@@ -461,6 +346,361 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             unit.hp = 0;
         }
     
+
+    units[index] = unit;
+}
+`;
+
+// ============================
+// シェーダーコード - キャシャーン専用AI（単体dispatch）
+// ============================
+// 設計メモ:
+// - キャシャーンは全ユニット中ただ1体。彼だけを専用dispatch（workgroup 1本）で
+//   処理することで、大衆シェーダから faction==2 分岐を消し、彼の側では
+//   ロック／ヒステリシス等の状態機械を素直に書けるようにする。
+// - 状態（ロック中の対象など）は CasshernState バッファに保持する。
+//   モード切替時のリセットは CPU（JS）側が writeBuffer で行う。
+// - 探索はすべて units 配列のシーケンシャルな全走査（リダクション）。
+//   ランダムアクセスはロック対象の参照（O(1)）のみ。
+const CASSHERN_SHADER = `
+struct UnitData {
+    pos: vec2<f32>,
+    vel: vec2<f32>,
+    hp: i32,
+    state: u32,
+    faction: u32,
+    rank: u32,
+    squad_id: u32,
+    morale: f32,
+    weapon_id: u32,
+    _pad1: u32,
+    _pad2: vec4<u32>,
+}
+
+struct GlobalUniforms {
+    delta_time: f32,
+    tick: u32,
+    ai_interval: u32,
+    human_phase: u32,
+    casshern_mode: u32,
+    player_input: u32,
+    player_target_x: f32,
+    player_target_y: f32,
+    map_width: f32,
+    map_height: f32,
+    num_units: u32,
+    vision_range: f32,
+    andro_dmg: i32,
+    human_dmg: i32,
+    human_speed_ratio: f32,
+    weapon_interval: u32,
+}
+
+struct CasshernState {
+    lock_enemy: i32,      // 殲滅: ロック中の敵
+    lock_boss: i32,       // 突撃: ロック中のボス (rank>=2)
+    guard_human: i32,     // 援護: 護衛対象の人類
+    engage_enemy: i32,    // 援護: 迎撃中の敵
+    engaging: u32,        // 援護: 迎撃中フラグ (0/1)
+    assault_contact: u32, // 突撃: ボスと接触中フラグ (0/1)
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<storage, read_write> units: array<UnitData>;
+@group(0) @binding(1) var<uniform> globals: GlobalUniforms;
+@group(0) @binding(2) var<storage, read_write> cstate: CasshernState;
+@group(0) @binding(3) var<storage, read_write> damage_buffer: array<atomic<i32>>;
+
+fn distance_sq(a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let d = a - b;
+    return dot(d, d);
+}
+
+fn normalize_vec(v: vec2<f32>) -> vec2<f32> {
+    let len = length(v);
+    if (len < 0.001) { return vec2<f32>(0.0, 0.0); }
+    return v / len;
+}
+
+fn rand(co: vec2<f32>) -> f32 {
+    return fract(sin(dot(co, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
+fn is_valid_target(idx: i32, faction: u32) -> bool {
+    if (idx < 0) { return false; }
+    let u = units[u32(idx)];
+    return u.state != 0u && u.faction == faction;
+}
+
+// from_pos に一番近いアンドロ（全走査）
+fn scan_nearest_andro(my_idx: u32, from_pos: vec2<f32>) -> i32 {
+    var nearest_dist_sq: f32 = 999999999.0;
+    var nearest_idx: i32 = -1;
+    for (var i: u32 = 0u; i < globals.num_units; i++) {
+        if (i == my_idx) { continue; }
+        let other = units[i];
+        if (other.state == 0u || other.faction != 0u) { continue; }
+        let dist_sq = distance_sq(from_pos, other.pos);
+        if (dist_sq < nearest_dist_sq) {
+            nearest_dist_sq = dist_sq;
+            nearest_idx = i32(i);
+        }
+    }
+    return nearest_idx;
+}
+
+// 一番近いボス（rank>=2 のみ。四天王とブロッケンJr）
+fn scan_nearest_boss(from_pos: vec2<f32>) -> i32 {
+    var nearest_dist_sq: f32 = 999999999.0;
+    var nearest_idx: i32 = -1;
+    for (var i: u32 = 0u; i < globals.num_units; i++) {
+        let other = units[i];
+        if (other.state == 0u || other.faction != 0u || other.rank < 2u) { continue; }
+        let dist_sq = distance_sq(from_pos, other.pos);
+        if (dist_sq < nearest_dist_sq) {
+            nearest_dist_sq = dist_sq;
+            nearest_idx = i32(i);
+        }
+    }
+    return nearest_idx;
+}
+
+// アンドロ軍団の重心。敵が居なければ (-1, -1)
+fn scan_andro_centroid() -> vec2<f32> {
+    var sum = vec2<f32>(0.0, 0.0);
+    var count: f32 = 0.0;
+    for (var i: u32 = 0u; i < globals.num_units; i++) {
+        let other = units[i];
+        if (other.state == 0u || other.faction != 0u) { continue; }
+        sum = sum + other.pos;
+        count = count + 1.0;
+    }
+    if (count > 0.0) {
+        return sum / count;
+    }
+    return vec2<f32>(-1.0, -1.0);
+}
+
+// 重心（＝敵軍の中心）に一番近い人類 ＝ 前線の人類
+fn scan_frontline_human(centroid: vec2<f32>) -> i32 {
+    var nearest_dist_sq: f32 = 999999999.0;
+    var nearest_idx: i32 = -1;
+    for (var i: u32 = 0u; i < globals.num_units; i++) {
+        let other = units[i];
+        if (other.state == 0u || other.faction != 1u) { continue; }
+        let dist_sq = distance_sq(centroid, other.pos);
+        if (dist_sq < nearest_dist_sq) {
+            nearest_dist_sq = dist_sq;
+            nearest_idx = i32(i);
+        }
+    }
+    return nearest_idx;
+}
+
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    if (global_id.x != 0u) {
+        return;
+    }
+
+    // キャシャーンは生成順で最後のユニット
+    let index = globals.num_units - 1u;
+    var unit = units[index];
+    if (unit.faction != 2u || unit.state == 0u) {
+        return;
+    }
+
+    let base_speed: f32 = 50.0;
+
+    // AI更新（大衆と同じ間隔制御）
+    let initial_delay = 60u;
+    let should_update_ai = (globals.tick > initial_delay) && ((globals.tick + index) % globals.ai_interval == 0u);
+
+    if (should_update_ai) {
+        // 自律的装備変更（大衆と同じルール）
+        let rnd = rand(vec2<f32>(f32(index), f32(globals.tick)));
+        if (rnd < 0.01) {
+            var max_weapon = 0u;
+            if (globals.tick > globals.weapon_interval * 3u) { max_weapon = 3u; }
+            else if (globals.tick > globals.weapon_interval * 2u) { max_weapon = 2u; }
+            else if (globals.tick > globals.weapon_interval) { max_weapon = 1u; }
+            let weapon_choice = u32(rand(vec2<f32>(f32(index), f32(globals.tick) + 1.0)) * f32(max_weapon + 1u));
+            unit.weapon_id = weapon_choice;
+        }
+
+        // 武器パラメータ（従来どおり: 基礎ダメージ10、キャシャーン補正 ×10 / 射程×2）
+        var range = 20.0;
+        var damage = 10;
+        if (unit.weapon_id == 1u) {      // Spread
+            range = 15.0;
+            damage = damage * 2 / 3;
+        } else if (unit.weapon_id == 2u) { // Sniper
+            range = 60.0;
+        } else if (unit.weapon_id == 3u) { // Melee
+            range = 5.0;
+            damage = damage * 5;
+        }
+        damage *= 10;
+        range *= 2.0;
+
+        var mode = globals.casshern_mode;
+        var new_vel = unit.vel;
+        var attack_idx: i32 = -1;
+
+        // ---- モードごとの前提確定（ロックの検証とフォールバック） ----
+        var andro_centroid = vec2<f32>(-1.0, -1.0);
+        if (mode == 1u) {
+            // 突撃: ボス（rank>=2）のロックを検証。無効なら最寄りのボスをロックし直す
+            var boss_ok = false;
+            if (cstate.lock_boss >= 0) {
+                let b = units[u32(cstate.lock_boss)];
+                boss_ok = (b.state != 0u && b.faction == 0u && b.rank >= 2u);
+            }
+            if (!boss_ok) {
+                cstate.lock_boss = scan_nearest_boss(unit.pos);
+                cstate.assault_contact = 0u;
+            }
+            if (cstate.lock_boss == -1) {
+                mode = 0u; // ボス全滅 → 殲滅にフォールバック
+            }
+        } else if (mode == 2u) {
+            // 援護: 護衛対象（前線の人類）のロックを検証
+            andro_centroid = scan_andro_centroid();
+            if (andro_centroid.x < 0.0) {
+                mode = 0u; // 敵が居ない → 殲滅（敵なしなら停止する）
+            } else {
+                let candidate = scan_frontline_human(andro_centroid);
+                if (candidate == -1) {
+                    mode = 0u; // 人類全滅 → 殲滅にフォールバック
+                } else if (!is_valid_target(cstate.guard_human, 1u)) {
+                    cstate.guard_human = candidate;
+                    cstate.engaging = 0u;
+                } else if (candidate != cstate.guard_human) {
+                    // 乗り換えマージン: 候補が現対象より重心に3割以上近い場合のみ
+                    let d_cand = distance_sq(units[u32(candidate)].pos, andro_centroid);
+                    let d_cur = distance_sq(units[u32(cstate.guard_human)].pos, andro_centroid);
+                    if (d_cand < d_cur * 0.49) {
+                        cstate.guard_human = candidate;
+                        cstate.engaging = 0u;
+                    }
+                }
+            }
+        }
+
+        // ---- モード別挙動 ----
+        if (mode == 1u) {
+            // ===== 突撃: ロックしたボスを狩る =====
+            let boss = units[u32(cstate.lock_boss)];
+            let dist_boss = length(boss.pos - unit.pos);
+
+            // 接触状態のヒステリシス: 射程内で接触、射程×1.5を超えたら離脱
+            if (cstate.assault_contact == 0u) {
+                if (dist_boss <= range) { cstate.assault_contact = 1u; }
+            } else {
+                if (dist_boss > range * 1.5) { cstate.assault_contact = 0u; }
+            }
+
+            if (cstate.assault_contact == 1u) {
+                // 接触中: その場でボスを殴り続ける（雑兵に流れない）
+                new_vel = vec2<f32>(0.0, 0.0);
+                attack_idx = cstate.lock_boss;
+            } else {
+                // 接近中: 速度100でボスへ。進路の最寄りの敵が射程内なら殴る
+                new_vel = normalize_vec(boss.pos - unit.pos) * base_speed * 2.0;
+                let n = scan_nearest_andro(index, unit.pos);
+                if (n != -1 && sqrt(distance_sq(units[u32(n)].pos, unit.pos)) < range) {
+                    attack_idx = n;
+                }
+            }
+        } else if (mode == 2u) {
+            // ===== 援護: 前線の人類の盾になる =====
+            let human = units[u32(cstate.guard_human)];
+            // 持ち場: 護衛対象から敵重心の方向へ 35px
+            let post = human.pos + normalize_vec(andro_centroid - human.pos) * 35.0;
+
+            // 迎撃状態のヒステリシス: 持ち場の80px以内で迎撃開始、120px外で離脱
+            if (cstate.engaging == 0u) {
+                let n = scan_nearest_andro(index, post);
+                if (n != -1 && sqrt(distance_sq(units[u32(n)].pos, post)) < 80.0) {
+                    cstate.engaging = 1u;
+                    cstate.engage_enemy = n;
+                }
+            }
+            if (cstate.engaging == 1u) {
+                if (!is_valid_target(cstate.engage_enemy, 0u)) {
+                    cstate.engaging = 0u;
+                } else if (sqrt(distance_sq(units[u32(cstate.engage_enemy)].pos, post)) > 120.0) {
+                    cstate.engaging = 0u;
+                }
+            }
+
+            if (cstate.engaging == 1u) {
+                // 迎撃中: その敵を追って殴る
+                let e = units[u32(cstate.engage_enemy)];
+                new_vel = normalize_vec(e.pos - unit.pos) * base_speed;
+                if (sqrt(distance_sq(e.pos, unit.pos)) < range) {
+                    attack_idx = cstate.engage_enemy;
+                }
+            } else {
+                // 持ち場へ帰還（速度125）。到着したら止まり、射程内の敵は殴る
+                let to_post = post - unit.pos;
+                if (length(to_post) > 10.0) {
+                    new_vel = normalize_vec(to_post) * base_speed * 2.5;
+                } else {
+                    new_vel = vec2<f32>(0.0, 0.0);
+                }
+                let n = scan_nearest_andro(index, unit.pos);
+                if (n != -1 && sqrt(distance_sq(units[u32(n)].pos, unit.pos)) < range) {
+                    attack_idx = n;
+                }
+            }
+        } else {
+            // ===== 殲滅: 最寄りの敵をロックして追う =====
+            let nearest = scan_nearest_andro(index, unit.pos);
+            if (nearest == -1) {
+                new_vel = vec2<f32>(0.0, 0.0);
+            } else {
+                if (!is_valid_target(cstate.lock_enemy, 0u)) {
+                    cstate.lock_enemy = nearest;
+                } else if (nearest != cstate.lock_enemy) {
+                    // 乗り換えマージン: 別の敵がロック対象の半分以下の距離に来た場合のみ
+                    let d_near = distance_sq(units[u32(nearest)].pos, unit.pos);
+                    let d_lock = distance_sq(units[u32(cstate.lock_enemy)].pos, unit.pos);
+                    if (d_near < d_lock * 0.25) {
+                        cstate.lock_enemy = nearest;
+                    }
+                }
+                let t = units[u32(cstate.lock_enemy)];
+                new_vel = normalize_vec(t.pos - unit.pos) * base_speed;
+                if (sqrt(distance_sq(t.pos, unit.pos)) < range) {
+                    attack_idx = cstate.lock_enemy;
+                }
+            }
+        }
+
+        // 攻撃適用
+        if (attack_idx != -1) {
+            atomicAdd(&damage_buffer[u32(attack_idx)], damage);
+        }
+        unit.vel = new_vel;
+    }
+
+    // 壁際での跳ね返りを優先（大衆と同じ）
+    let margin = 20.0;
+    if (unit.pos.x < margin && unit.vel.x > 0.0) { unit.vel.x = abs(unit.vel.x); }
+    if (unit.pos.x > globals.map_width - margin && unit.vel.x < 0.0) { unit.vel.x = -abs(unit.vel.x); }
+    if (unit.pos.y < margin && unit.vel.y > 0.0) { unit.vel.y = abs(unit.vel.y); }
+    if (unit.pos.y > globals.map_height - margin && unit.vel.y < 0.0) { unit.vel.y = -abs(unit.vel.y); }
+
+    // 位置更新
+    unit.pos += unit.vel * globals.delta_time;
+
+    // 境界チェック
+    if (unit.pos.x < 0.0) { unit.pos.x = 0.0; unit.vel.x *= -1.0; }
+    if (unit.pos.x > globals.map_width) { unit.pos.x = globals.map_width; unit.vel.x *= -1.0; }
+    if (unit.pos.y < 0.0) { unit.pos.y = 0.0; unit.vel.y *= -1.0; }
+    if (unit.pos.y > globals.map_height) { unit.pos.y = globals.map_height; unit.vel.y *= -1.0; }
 
     units[index] = unit;
 }
@@ -789,6 +1029,16 @@ async function main() {
   // 初期化（0埋め）
   device.queue.writeBuffer(damageBuffer, 0, new Int32Array(numUnits).fill(0) as any);
 
+  // キャシャーン専用AIの状態バッファ (CasshernState: 8 * 4 bytes = 32 bytes)
+  // lock_enemy, lock_boss, guard_human, engage_enemy (i32, -1 = なし),
+  // engaging, assault_contact (u32), pad x2
+  const casshernStateInit = new Int32Array([-1, -1, -1, -1, 0, 0, 0, 0]);
+  const casshernStateBuffer = device.createBuffer({
+    size: 32,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(casshernStateBuffer, 0, casshernStateInit);
+
   // 集計用バッファ (3 factions * 16 bytes = 48 bytes)
   // FactionStats: count(u32), hp(i32), pad(u32), pad(u32)
   const STATS_BUFFER_SIZE = 48;
@@ -876,6 +1126,32 @@ async function main() {
   const computePipeline = device.createComputePipeline({
     layout: device.createPipelineLayout({ bindGroupLayouts: [computeLayout] }),
     compute: { module: computeModule, entryPoint: 'main' }
+  });
+
+  // キャシャーン専用AIパイプライン（単体dispatch）
+  const casshernModule = device.createShaderModule({ code: CASSHERN_SHADER });
+  const casshernLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+      { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // casshern state
+      { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } }, // damage_buffer
+    ]
+  });
+
+  const casshernBindGroup = device.createBindGroup({
+    layout: casshernLayout,
+    entries: [
+      { binding: 0, resource: { buffer: unitBuffer } },
+      { binding: 1, resource: { buffer: uniformBuffer } },
+      { binding: 2, resource: { buffer: casshernStateBuffer } },
+      { binding: 3, resource: { buffer: damageBuffer } },
+    ]
+  });
+
+  const casshernPipeline = device.createComputePipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [casshernLayout] }),
+    compute: { module: casshernModule, entryPoint: 'main' }
   });
 
   // レンダーパイプライン
@@ -1006,6 +1282,13 @@ async function main() {
     computePass.setBindGroup(0, computeBindGroup);
     computePass.dispatchWorkgroups(Math.ceil(numUnits / 64));
     computePass.end();
+
+    // Pass 2.5: キャシャーン専用AI（1体だけを別dispatchで処理）
+    const casshernPass = encoder.beginComputePass();
+    casshernPass.setPipeline(casshernPipeline);
+    casshernPass.setBindGroup(0, casshernBindGroup);
+    casshernPass.dispatchWorkgroups(1);
+    casshernPass.end();
 
     // Render Pass
     const textureView = context!.getCurrentTexture().createView();
@@ -1289,16 +1572,25 @@ async function main() {
     annihilateBtn?.classList.toggle('active', casshernMode === 0);
   }
 
+  // モード切替時はキャシャーンAIの状態（ロック等）をリセットする。
+  // リセットは監督（CPU/JS）の仕事：状態バッファを初期値で上書きする。
+  function resetCasshernState() {
+    device.queue.writeBuffer(casshernStateBuffer, 0, casshernStateInit);
+  }
+
   assaultBtn?.addEventListener('click', () => {
     casshernMode = 1;
+    resetCasshernState();
     updateCasshernModeUI();
   });
   supportBtn?.addEventListener('click', () => {
     casshernMode = 2;
+    resetCasshernState();
     updateCasshernModeUI();
   });
   annihilateBtn?.addEventListener('click', () => {
     casshernMode = 0;
+    resetCasshernState();
     updateCasshernModeUI();
   });
 
