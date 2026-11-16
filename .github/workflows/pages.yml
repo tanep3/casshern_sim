@@ -1,10 +1,12 @@
 name: Pages
 
-# main への push と手動実行で GitHub Pages に公開する。
+# リリースはタグ駆動: v* タグの push で、そのタグのコミットからビルドして
+# GitHub Pages に公開する。バージョンの正はタグであり、frontend/package.json の
+# appVersion はタグから 'v' を除いたものと一致させること（docs/maintenance.md）。
 # ビルドは build.sh と同じ手順（wasm-pack → pkg を frontend へ → Vite build）。
 on:
   push:
-    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
